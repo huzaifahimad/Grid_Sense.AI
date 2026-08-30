@@ -5,8 +5,8 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Activity, AlertTriangle, ShieldCheck, Zap, Server, RefreshCw, BarChart2, Cpu, FileText, Globe } from 'lucide-react';
 
 // API is co-deployed on Vercel as Python serverless functions in /api/
-// Use relative path so it works on any Vercel deployment URL automatically
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+// Trailing slash stripped to avoid /api// double-slash on root fetch
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
 const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA === 'true' ? true : false;
 
 // Mock Fallback Data
@@ -128,8 +128,8 @@ export default function GridSenseDashboard() {
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
-      // Test API root connection
-      const rootRes = await fetch(`${API_BASE_URL}/`);
+      // Test API root connection — no trailing slash to avoid /api// double slash
+      const rootRes = await fetch(`${API_BASE_URL}`);
       if (rootRes.ok) {
         setApiConnected(true);
         if (!useMock) {
@@ -160,7 +160,7 @@ export default function GridSenseDashboard() {
               setShapFactors(rData.top_contributing_factors.map(f => ({
                 feature: f.feature,
                 impact: f.impact,
-                label: f.feature.replace('_', ' ')
+                label: f.feature.replace(/_/g, ' ')   // replace ALL underscores
               })));
             }
           }
@@ -453,21 +453,21 @@ export default function GridSenseDashboard() {
             <table className="w-full text-left text-xs text-slate-300">
               <thead className="bg-slate-900 text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-800">
                 <tr>
-                  <th className="p-3">Order Step</th>
+                  <th className="p-3">Priority</th>
                   <th className="p-3">Target Feeder</th>
                   <th className="p-3">Shed Amount (MW)</th>
-                  <th className="p-3">Feeder Priority</th>
+                  <th className="p-3">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
-                {shedSchedule.shed_schedule.map(step => (
-                  <tr key={step.step} className="hover:bg-slate-800/40">
-                    <td className="p-3 font-bold text-white">Step #{step.step}</td>
-                    <td className="p-3 font-mono text-blue-300">{step.target_feeder}</td>
+                {shedSchedule.shed_schedule.map((step, idx) => (
+                  <tr key={idx} className="hover:bg-slate-800/40">
+                    <td className="p-3 font-bold text-white">#{step.priority ?? idx + 1}</td>
+                    <td className="p-3 font-mono text-blue-300">{step.feeder ?? step.target_feeder ?? '—'}</td>
                     <td className="p-3 font-mono font-bold text-rose-400">{step.shed_mw} MW</td>
                     <td className="p-3">
                       <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-semibold border border-slate-700">
-                        {step.priority}
+                        {step.action ?? step.priority ?? '—'}
                       </span>
                     </td>
                   </tr>
@@ -476,6 +476,8 @@ export default function GridSenseDashboard() {
             </table>
           </div>
         )}
+      </div>{/* end shed-schedule card */}
+
       {/* Footer */}
       <div className="mt-6 pb-4 text-center">
         <p className="text-slate-500 text-xs tracking-widest uppercase">
