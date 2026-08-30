@@ -4,9 +4,10 @@ import { OrbitControls, Sphere, Line, Text } from '@react-three/drei';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
 import { Activity, AlertTriangle, ShieldCheck, Zap, Server, RefreshCw, BarChart2, Cpu, FileText, Globe } from 'lucide-react';
 
-// Read Vite Environment Variables
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA === 'false' ? false : true;
+// API is co-deployed on Vercel as Python serverless functions in /api/
+// Use relative path so it works on any Vercel deployment URL automatically
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA === 'true' ? true : false;
 
 // Mock Fallback Data
 const MOCK_ASSETS = [
@@ -475,6 +476,13 @@ export default function GridSenseDashboard() {
             </table>
           </div>
         )}
+      {/* Footer */}
+      <div className="mt-6 pb-4 text-center">
+        <p className="text-slate-500 text-xs tracking-widest uppercase">
+          ⚡ GridSense AI &nbsp;·&nbsp; Crafted by{' '}
+          <span className="text-blue-400 font-semibold">Huzaifa Himad</span>
+          &nbsp;·&nbsp; LightGBM · SHAP · ENTSO-E · NASA POWER
+        </p>
       </div>
     </div>
   );
