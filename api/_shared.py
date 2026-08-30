@@ -1,18 +1,15 @@
 """
-Shared model loader for all Vercel Python serverless functions.
-Models are loaded once per warm instance and cached.
+Shared model loader for Vercel Python serverless functions.
+- LightGBM models loaded via joblib (real inference at request time)
+- SHAP values pre-computed from real model and served from shap_values.json
+  (avoids shap/numba/llvmlite build failures on Vercel)
 """
-import os
-import sys
-import json
-import joblib
+import os, json, joblib
 import pandas as pd
 
 # ── paths ──────────────────────────────────────────────────────────────────
-# api/_shared.py lives in  <repo>/api/
-# ml_models/               lives in  <repo>/ml_models/
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO = os.path.dirname(_HERE)
+_HERE      = os.path.dirname(os.path.abspath(__file__))   # api/
+_REPO      = os.path.dirname(_HERE)                        # repo root
 MODELS_DIR = os.path.join(_REPO, "ml_models")
 
 # ── zone config ────────────────────────────────────────────────────────────
@@ -31,60 +28,59 @@ FEATURE_COLS = [
     "load_rolling_mean_24h", "load_rolling_std_24h", "load_rolling_mean_168h",
 ]
 
-# ── lazy-loaded model cache (warm instance reuse) ──────────────────────────
+# ── lazy model cache (reused across warm requests) ─────────────────────────
 _cache: dict = {}
 
 def get_models() -> dict:
     if "loaded" not in _cache:
         _cache["forecaster"] = joblib.load(os.path.join(MODELS_DIR, "lgbm_load_forecaster.joblib"))
         _cache["classifier"] = joblib.load(os.path.join(MODELS_DIR, "lgbm_risk_classifier.joblib"))
-        _cache["explainer"]  = joblib.load(os.path.join(MODELS_DIR, "shap_explainer.joblib"))
         _cache["features"]   = pd.read_parquet(os.path.join(MODELS_DIR, "training_features.parquet"))
+        # Pre-computed SHAP values from real TreeExplainer (avoids shap runtime dep on Vercel)
+        with open(os.path.join(MODELS_DIR, "shap_values.json"), "r") as f:
+            _cache["shap"] = json.load(f)
         _cache["loaded"] = True
     return _cache
 
-# ── helpers ────────────────────────────────────────────────────────────────
+# ── core inference helper ──────────────────────────────────────────────────
 def risk_for_zone(zone_code: str, models: dict):
-    """Return (prob, top_factors, cur_load, cur_temp) from real model inference."""
-    df = models["features"]
+    """
+    Returns (prob, top_factors, cur_load, cur_temp).
+    - prob: real LightGBM predict_proba output
+    - top_factors: pre-computed SHAP values (from real TreeExplainer, captured offline)
+    """
+    df        = models["features"]
     zone_info = GRID_ZONES[zone_code]
-    capacity = zone_info["capacity_mw"]
+    capacity  = zone_info["capacity_mw"]
+    zd        = df[df["zone"] == zone_code]
 
-    zd = df[df["zone"] == zone_code]
     if zd.empty:
-        # FR has no real data — sensible fallback
-        cur_load = capacity * 0.7
-        cur_temp = 22.0
-        prob = 0.01
-        top_factors = []
-        return prob, top_factors, cur_load, cur_temp
+        # FR has no real ENTSO-E data (persistent 503 from their API)
+        return 0.01, [], capacity * 0.70, 22.0
 
-    last_row = zd.iloc[-1]
-    cur_load = float(last_row["load_mw"])
-    cur_temp = float(last_row["temperature"])
-    feat_row = zd.iloc[-1:][FEATURE_COLS]
+    last_row  = zd.iloc[-1]
+    cur_load  = float(last_row["load_mw"])
+    cur_temp  = float(last_row["temperature"])
+    feat_row  = zd.iloc[-1:][FEATURE_COLS]
 
-    # Real LightGBM classifier inference
+    # ── Real LightGBM inference ──
     prob = float(models["classifier"].predict_proba(feat_row)[0, 1])
 
-    # Real SHAP values
-    shap_vals = models["explainer"].shap_values(feat_row)
-    vals = shap_vals[1][0] if isinstance(shap_vals, list) else shap_vals[0]
-    pairs = sorted(zip(FEATURE_COLS, [float(v) for v in vals]),
-                   key=lambda x: abs(x[1]), reverse=True)
-    top_factors = [{"feature": f, "impact": round(v, 4)} for f, v in pairs[:5]]
+    # ── Pre-computed SHAP (real values, computed offline from the same model) ──
+    top_factors = models["shap"].get(zone_code, [])
 
     return prob, top_factors, cur_load, cur_temp
 
-def cors_headers(self_handler):
-    self_handler.send_header("Access-Control-Allow-Origin", "*")
-    self_handler.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-    self_handler.send_header("Access-Control-Allow-Headers", "Content-Type")
+# ── HTTP helpers ───────────────────────────────────────────────────────────
+def cors_headers(h):
+    h.send_header("Access-Control-Allow-Origin",  "*")
+    h.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+    h.send_header("Access-Control-Allow-Headers", "Content-Type")
 
-def send_json(self_handler, data: dict, status: int = 200):
+def send_json(h, data: dict, status: int = 200):
     body = json.dumps(data).encode()
-    self_handler.send_response(status)
-    self_handler.send_header("Content-Type", "application/json")
-    cors_headers(self_handler)
-    self_handler.end_headers()
-    self_handler.wfile.write(body)
+    h.send_response(status)
+    h.send_header("Content-Type", "application/json")
+    cors_headers(h)
+    h.end_headers()
+    h.wfile.write(body)
